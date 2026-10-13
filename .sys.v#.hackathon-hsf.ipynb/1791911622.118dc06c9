@@ -1,0 +1,383 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "0db2145f-c860-4132-b53b-0b65f18d6a76",
+   "metadata": {},
+   "source": [
+    "# Creating Root files for hackathon"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "6ec205b1-f83a-4a0d-b0aa-1919bcb493f5",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import argparse\n",
+    "import sys\n",
+    "\n",
+    "import awkward as ak\n",
+    "import numpy as np\n",
+    "import uproot\n",
+    "import vector\n",
+    "\n",
+    "vector.register_awkward()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "669a6338-7e7c-4a32-b5a3-74a3e8a365b9",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "files = [\"root://eospublic.cern.ch//eos/opendata/cms/mc/RunIISummer20UL16NanoAODv9/Higgs0Mf05ph0ToWW_M-125_TuneCP5_13TeV-powheg-jhugen727-pythia8/NANOAODSIM/106X_mcRun2_asymptotic_v17-v2/40000/2600A354-96F9-4C48-99FA-D77C85CB7806.root\"]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "aa59a282-9e82-4878-b692-908130f548dc",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "tree_name = \"Events\"\n",
+    "output_file = \"Higgs.root\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "8d82d025-010e-4a0f-81bb-d75d46d361e5",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "keep_branches = [\"Electron_pt\", \"Electron_eta\", \"Electron_phi\", \"Electron_mass\", \n",
+    "        \"Electron_mvaFall17V2Iso_WP90\", \"Electron_charge\",\n",
+    "        \n",
+    "        \"Muon_pt\", \"Muon_eta\", \"Muon_phi\", \"Muon_mass\", \n",
+    "        \"Muon_tightId\", \"Muon_charge\", \"Muon_pfRelIso04_all\",\n",
+    "        \"PuppiMET_pt\", \"PuppiMET_phi\",\n",
+    "        \n",
+    "        \"Jet_pt\", \"Jet_eta\", \"Jet_phi\", \"Jet_mass\",\n",
+    "        \"Jet_btagDeepFlavB\", \"nJet\", \"Jet_jetId\", \"Jet_puId\",]\n",
+    "calc_branches = []"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "291d4a29-9c11-4593-bb9a-b83da13220ed",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "BAD = -999.0 # value for variables where a variable is undefined"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "93275104-3971-4937-b9e7-1e58019ef2b3",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def wrap_angle_to_pi(angle):\n",
+    "        return (angle + np.pi) % (2 * np.pi) - np.pi\n",
+    " \n",
+    " \n",
+    "def create_lepton_vector(lepton):\n",
+    "    \"\"\"4-vector from lepton properties (vector.zip works with awkward records).\"\"\"\n",
+    "    return vector.zip({\n",
+    "        \"pt\": lepton.pt,\n",
+    "        \"eta\": lepton.eta,\n",
+    "        \"phi\": lepton.phi,\n",
+    "        \"mass\": lepton.mass,\n",
+    "    })\n",
+    " \n",
+    " \n",
+    "def cal_kinematic_var(leading, subleading, met):\n",
+    "    lepton_1 = create_lepton_vector(leading)\n",
+    "    lepton_2 = create_lepton_vector(subleading)\n",
+    "    dilepton = lepton_1 + lepton_2\n",
+    " \n",
+    "    masses = dilepton.mass\n",
+    "    ptll = dilepton.pt\n",
+    "    dphi = wrap_angle_to_pi(leading.phi - subleading.phi)\n",
+    " \n",
+    "    # Higgs transverse mass\n",
+    "    mt_higgs_dphi = wrap_angle_to_pi(dilepton.phi - met.phi)\n",
+    "    mt_higgs = np.sqrt(2 * ptll * met.pt * (1 - np.cos(mt_higgs_dphi)))\n",
+    " \n",
+    "    # Lepton 2 transverse mass\n",
+    "    mt_l2_met_dphi = wrap_angle_to_pi(subleading.phi - met.phi)\n",
+    "    mt_l2_met = np.sqrt(2 * subleading.pt * met.pt * (1 - np.cos(mt_l2_met_dphi)))\n",
+    " \n",
+    "    return masses, ptll, dphi, mt_higgs, mt_l2_met\n",
+    " \n",
+    " \n",
+    "def calculate_mjj(jets):\n",
+    "    n_jets = ak.num(jets)\n",
+    "    mjj = ak.zeros_like(n_jets, dtype=float)\n",
+    "    has_two_jets = n_jets >= 2\n",
+    "    if ak.any(has_two_jets):\n",
+    "        jets_padded = ak.pad_none(jets, 2, axis=1)\n",
+    "        jet_vectors = ak.zip({\n",
+    "            \"pt\": ak.fill_none(jets_padded.pt, 0.0),\n",
+    "            \"eta\": ak.fill_none(jets_padded.eta, 0.0),\n",
+    "            \"phi\": ak.fill_none(jets_padded.phi, 0.0),\n",
+    "            \"mass\": ak.fill_none(jets_padded.mass, 0.0),\n",
+    "        }, with_name=\"Momentum4D\")\n",
+    "        jet1 = jet_vectors[:, 0]\n",
+    "        jet2 = jet_vectors[:, 1]\n",
+    "        dijet = jet1 + jet2\n",
+    "        mjj = ak.where(has_two_jets, dijet.mass, 0.0)\n",
+    "    return mjj\n",
+    " \n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "id": "7db7bde9-e14e-4dc8-9568-bc3c7bfa5575",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def to_flat(x, mask=None):\n",
+    "    \"\"\"awkward -> flat float32 numpy array; events outside mask get BAD.\"\"\"\n",
+    "    x = ak.to_numpy(ak.fill_none(x, BAD)).astype(np.float32)\n",
+    "    if mask is not None:\n",
+    "        x = np.where(ak.to_numpy(mask), x, np.float32(BAD))\n",
+    "    return x\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "id": "24f926e1-182c-4e9d-aeb0-6bcaeaa08f61",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def select_tight_leptons(arrays):\n",
+    "    \"\"\"Apply tight ID and isolation cuts to leptons\"\"\"\n",
+    "    tight_electron_mask = arrays.Electron_mvaFall17V2Iso_WP90 == 1\n",
+    "    tight_muon_mask = (arrays.Muon_tightId == 1) & (arrays.Muon_pfRelIso04_all < 0.15)\n",
+    " \n",
+    "    tight_electrons = ak.zip({\n",
+    "        \"pt\": arrays.Electron_pt[tight_electron_mask],\n",
+    "        \"eta\": arrays.Electron_eta[tight_electron_mask],\n",
+    "        \"phi\": arrays.Electron_phi[tight_electron_mask],\n",
+    "        \"mass\": arrays.Electron_mass[tight_electron_mask],\n",
+    "        \"charge\": arrays.Electron_charge[tight_electron_mask],\n",
+    "        \"flavor\": ak.ones_like(arrays.Electron_pt[tight_electron_mask]) * 11\n",
+    "    })\n",
+    " \n",
+    "    tight_muons = ak.zip({\n",
+    "        \"pt\": arrays.Muon_pt[tight_muon_mask],\n",
+    "        \"eta\": arrays.Muon_eta[tight_muon_mask],\n",
+    "        \"phi\": arrays.Muon_phi[tight_muon_mask],\n",
+    "        \"mass\": arrays.Muon_mass[tight_muon_mask],\n",
+    "        \"charge\": arrays.Muon_charge[tight_muon_mask],\n",
+    "        \"flavor\": ak.ones_like(arrays.Muon_pt[tight_muon_mask]) * 13\n",
+    "    })\n",
+    " \n",
+    "    tight_leptons = ak.concatenate([tight_electrons, tight_muons], axis=1)\n",
+    "    return tight_leptons, tight_electron_mask, tight_muon_mask\n",
+    " \n",
+    " \n",
+    "def choose_leading_subleading(tight_leptons):\n",
+    "    \"\"\"Sort tight leptons by pT, return leading, subleading (no selection cuts).\n",
+    "    Events with < 2 tight leptons get zeros and has2 = False.\"\"\"\n",
+    "    sorted_leptons = tight_leptons[ak.argsort(tight_leptons.pt, axis=1, ascending=False)]\n",
+    "    four = ak.zip({\"pt\": sorted_leptons.pt, \"eta\": sorted_leptons.eta,\n",
+    "                   \"phi\": sorted_leptons.phi, \"mass\": sorted_leptons.mass})\n",
+    "    has2 = ak.num(four, axis=1) >= 2\n",
+    "    padded = ak.pad_none(four, 2, axis=1)\n",
+    "    zero = {\"pt\": 0.0, \"eta\": 0.0, \"phi\": 0.0, \"mass\": 0.0}\n",
+    "    leading = ak.fill_none(padded[:, 0], zero, axis=0)\n",
+    "    subleading = ak.fill_none(padded[:, 1], zero, axis=0)\n",
+    "    return leading, subleading, has2\n",
+    " \n",
+    " \n",
+    "def count_jets(arrays, jet_pt_threshold=30, tight_leptons=None):\n",
+    "    jets = ak.zip({\n",
+    "        \"pt\": arrays.Jet_pt,\n",
+    "        \"eta\": arrays.Jet_eta,\n",
+    "        \"phi\": arrays.Jet_phi,\n",
+    "        \"mass\": arrays.Jet_mass,\n",
+    "        \"jetId\": arrays.Jet_jetId,\n",
+    "        \"btagDeepFlavB\": arrays.Jet_btagDeepFlavB,\n",
+    "        \"puId\": arrays.Jet_puId\n",
+    "    })\n",
+    "    pu_id_mask = (jets.pt > 50) | ((jets.pt <= 50) & (jets.puId >= 4))\n",
+    "    good_mask = (jets.jetId >= 2) & (abs(jets.eta) < 4.7) & pu_id_mask\n",
+    " \n",
+    "    if tight_leptons is not None and ak.max(ak.num(tight_leptons)) > 0:\n",
+    "        jets_eta = jets.eta[:, :, None]\n",
+    "        jets_phi = jets.phi[:, :, None]\n",
+    "        leps_eta = tight_leptons.eta[:, None, :]\n",
+    "        leps_phi = tight_leptons.phi[:, None, :]\n",
+    " \n",
+    "        deta = jets_eta - leps_eta\n",
+    "        dphi = (jets_phi - leps_phi + np.pi) % (2 * np.pi) - np.pi\n",
+    "        dr = np.sqrt(deta**2 + dphi**2)\n",
+    " \n",
+    "        min_dr = ak.min(dr, axis=-1)\n",
+    "        min_dr = ak.fill_none(min_dr, 999.0)\n",
+    "        good_mask = good_mask & (min_dr > 0.4)\n",
+    " \n",
+    "    good_jets = jets[good_mask]\n",
+    "    sorted_jets = good_jets[ak.argsort(good_jets.pt, axis=1, ascending=False)]\n",
+    "    lead_jet_pt = ak.fill_none(ak.firsts(sorted_jets.pt), 0)\n",
+    "    sublead_jet_pt = ak.fill_none(ak.firsts(sorted_jets[:, 1:].pt), 0)\n",
+    " \n",
+    "    isZeroJet = (lead_jet_pt < jet_pt_threshold)\n",
+    "    isOneJet = (lead_jet_pt >= jet_pt_threshold) & (sublead_jet_pt < jet_pt_threshold)\n",
+    "    isTwoJet = (sublead_jet_pt >= jet_pt_threshold)\n",
+    " \n",
+    "    n_jets = ak.sum(sorted_jets.pt >= jet_pt_threshold, axis=1)\n",
+    "    return n_jets, good_mask, sorted_jets, isZeroJet, isOneJet, isTwoJet\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "id": "79e2f87d-886d-44e0-8cbd-b5265dfea1e7",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    " \n",
+    "# ---------------------------------------------------------------- main loop\n",
+    "first = True\n",
+    "with uproot.recreate(output_file) as fout:\n",
+    "    for a in uproot.iterate({f: tree_name for f in files},\n",
+    "                            filter_name=keep_branches + calc_branches,\n",
+    "                            step_size=\"100 MB\", library=\"ak\"):\n",
+    " \n",
+    "        # ---- old branches, stored as they are\n",
+    "        out = {name: a[name] for name in keep_branches}\n",
+    " \n",
+    "        # ---- intermediate objects (calculation only, not saved)\n",
+    "        tight_leptons, _, _ = select_tight_leptons(a)\n",
+    "        leading, subleading, has2 = choose_leading_subleading(tight_leptons)\n",
+    "        met = ak.zip({\"pt\": a[\"PuppiMET_pt\"], \"phi\": a[\"PuppiMET_phi\"]})  # <-- your MET names\n",
+    "        sorted_jets = count_jets(a, tight_leptons=tight_leptons)[2]\n",
+    " \n",
+    "        # ---- new branches (saved)\n",
+    "        mll, ptll, dphi, mth, mtw2 = cal_kinematic_var(leading, subleading, met)\n",
+    "        out[\"mll\"] = to_flat(mll, has2)\n",
+    "        out[\"ptll\"] = to_flat(ptll, has2)\n",
+    "        out[\"dphill\"] = to_flat(dphi, has2)\n",
+    "        out[\"mth\"] = to_flat(mth, has2)\n",
+    "        out[\"mtw2\"] = to_flat(mtw2, has2)\n",
+    "        out[\"mjj\"] = to_flat(calculate_mjj(sorted_jets))\n",
+    " \n",
+    "        if first:\n",
+    "            fout[\"Events\"] = out\n",
+    "            first = False\n",
+    "        else:\n",
+    "            fout[\"Events\"].extend(out)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "id": "f03e6ed5-6330-42b6-806f-246d9dd11a27",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Done -> Higgs.root\n"
+     ]
+    }
+   ],
+   "source": [
+    "print(\"Done ->\", output_file)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "id": "b457063b-b843-4679-a401-8b98dd20f6a1",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "url = \"root://eospublic.cern.ch//eos/opendata/cms/mc/RunIISummer20UL16NanoAODv9/Higgs0Mf05ph0ToWW_M-125_TuneCP5_13TeV-powheg-jhugen727-pythia8/NANOAODSIM/106X_mcRun2_asymptotic_v17-v2/40000/5D5B49D9-669B-4341-AEAD-84E93D030183.root\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 13,
+   "id": "60a54ef7-70ea-459f-914b-3ad798c44c5d",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import uproot"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 14,
+   "id": "97e7a09c-1931-47dd-a01b-87799c2a5c1b",
+   "metadata": {},
+   "outputs": [
+    {
+     "ename": "OSError",
+     "evalue": "Failed to submit <bound method File.open of <XRootD.client.file.File object at 0x7f18bab04230>> request: [FATAL] Connection error",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[0;31mOSError\u001b[0m                                   Traceback (most recent call last)",
+      "Cell \u001b[0;32mIn[14], line 1\u001b[0m\n\u001b[0;32m----> 1\u001b[0m \u001b[38;5;28;01mwith\u001b[39;00m \u001b[43muproot\u001b[49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43mopen\u001b[49m\u001b[43m(\u001b[49m\u001b[43murl\u001b[49m\u001b[43m)\u001b[49m \u001b[38;5;28;01mas\u001b[39;00m f:\n\u001b[1;32m      2\u001b[0m     \u001b[38;5;28mprint\u001b[39m(f\u001b[38;5;241m.\u001b[39mkeys())\n",
+      "File \u001b[0;32m/usr/local/lib/python3.12/site-packages/uproot/reading.py:142\u001b[0m, in \u001b[0;36mopen\u001b[0;34m(path, object_cache, array_cache, custom_classes, decompression_executor, interpretation_executor, **options)\u001b[0m\n\u001b[1;32m    133\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;28misinstance\u001b[39m(file_path, \u001b[38;5;28mstr\u001b[39m) \u001b[38;5;129;01mand\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m (\n\u001b[1;32m    134\u001b[0m     \u001b[38;5;28mhasattr\u001b[39m(file_path, \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mread\u001b[39m\u001b[38;5;124m\"\u001b[39m) \u001b[38;5;129;01mand\u001b[39;00m \u001b[38;5;28mhasattr\u001b[39m(file_path, \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mseek\u001b[39m\u001b[38;5;124m\"\u001b[39m)\n\u001b[1;32m    135\u001b[0m ):\n\u001b[1;32m    136\u001b[0m     \u001b[38;5;28;01mraise\u001b[39;00m \u001b[38;5;167;01mValueError\u001b[39;00m(\n\u001b[1;32m    137\u001b[0m         \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124m'\u001b[39m\u001b[38;5;124mpath\u001b[39m\u001b[38;5;124m'\u001b[39m\u001b[38;5;124m must be a string, pathlib.Path, an object with \u001b[39m\u001b[38;5;124m'\u001b[39m\u001b[38;5;124mread\u001b[39m\u001b[38;5;124m'\u001b[39m\u001b[38;5;124m and \u001b[39m\u001b[38;5;124m\"\u001b[39m\n\u001b[1;32m    138\u001b[0m         \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124m'\u001b[39m\u001b[38;5;124mseek\u001b[39m\u001b[38;5;124m'\u001b[39m\u001b[38;5;124m methods, or a length-1 dict of \u001b[39m\u001b[38;5;124m{\u001b[39m\u001b[38;5;124mfile_path: object_path}, \u001b[39m\u001b[38;5;124m\"\u001b[39m\n\u001b[1;32m    139\u001b[0m         \u001b[38;5;124mf\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mnot \u001b[39m\u001b[38;5;132;01m{\u001b[39;00mpath\u001b[38;5;132;01m!r}\u001b[39;00m\u001b[38;5;124m\"\u001b[39m\n\u001b[1;32m    140\u001b[0m     )\n\u001b[0;32m--> 142\u001b[0m file \u001b[38;5;241m=\u001b[39m \u001b[43mReadOnlyFile\u001b[49m\u001b[43m(\u001b[49m\n\u001b[1;32m    143\u001b[0m \u001b[43m    \u001b[49m\u001b[43mfile_path\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m    144\u001b[0m \u001b[43m    \u001b[49m\u001b[43mobject_cache\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mobject_cache\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m    145\u001b[0m \u001b[43m    \u001b[49m\u001b[43marray_cache\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43marray_cache\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m    146\u001b[0m \u001b[43m    \u001b[49m\u001b[43mcustom_classes\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mcustom_classes\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m    147\u001b[0m \u001b[43m    \u001b[49m\u001b[43mdecompression_executor\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mdecompression_executor\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m    148\u001b[0m \u001b[43m    \u001b[49m\u001b[43minterpretation_executor\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43minterpretation_executor\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m    149\u001b[0m \u001b[43m    \u001b[49m\u001b[38;5;241;43m*\u001b[39;49m\u001b[38;5;241;43m*\u001b[39;49m\u001b[43moptions\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m    150\u001b[0m \u001b[43m\u001b[49m\u001b[43m)\u001b[49m\n\u001b[1;32m    152\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m object_path \u001b[38;5;129;01mis\u001b[39;00m \u001b[38;5;28;01mNone\u001b[39;00m:\n\u001b[1;32m    153\u001b[0m     \u001b[38;5;28;01mreturn\u001b[39;00m file\u001b[38;5;241m.\u001b[39mroot_directory\n",
+      "File \u001b[0;32m/usr/local/lib/python3.12/site-packages/uproot/reading.py:573\u001b[0m, in \u001b[0;36mReadOnlyFile.__init__\u001b[0;34m(self, file_path, object_cache, array_cache, custom_classes, decompression_executor, interpretation_executor, **options)\u001b[0m\n\u001b[1;32m    565\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_options[\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mbegin_chunk_size\u001b[39m\u001b[38;5;124m\"\u001b[39m] \u001b[38;5;241m<\u001b[39m _file_header_fields_big\u001b[38;5;241m.\u001b[39msize:\n\u001b[1;32m    566\u001b[0m     \u001b[38;5;28;01mraise\u001b[39;00m \u001b[38;5;167;01mValueError\u001b[39;00m(\n\u001b[1;32m    567\u001b[0m         \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mbegin_chunk_size=\u001b[39m\u001b[38;5;132;01m{}\u001b[39;00m\u001b[38;5;124m is not enough to read the TFile header (\u001b[39m\u001b[38;5;132;01m{}\u001b[39;00m\u001b[38;5;124m)\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;241m.\u001b[39mformat(\n\u001b[1;32m    568\u001b[0m             \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_options[\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mbegin_chunk_size\u001b[39m\u001b[38;5;124m\"\u001b[39m],\n\u001b[1;32m    569\u001b[0m             _file_header_fields_big\u001b[38;5;241m.\u001b[39msize,\n\u001b[1;32m    570\u001b[0m         )\n\u001b[1;32m    571\u001b[0m     )\n\u001b[0;32m--> 573\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_begin_chunk \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43m_source\u001b[49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43mchunk\u001b[49m\u001b[43m(\u001b[49m\n\u001b[1;32m    574\u001b[0m \u001b[43m    \u001b[49m\u001b[38;5;241;43m0\u001b[39;49m\u001b[43m,\u001b[49m\u001b[43m \u001b[49m\u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43m_options\u001b[49m\u001b[43m[\u001b[49m\u001b[38;5;124;43m\"\u001b[39;49m\u001b[38;5;124;43mbegin_chunk_size\u001b[39;49m\u001b[38;5;124;43m\"\u001b[39;49m\u001b[43m]\u001b[49m\n\u001b[1;32m    575\u001b[0m \u001b[43m\u001b[49m\u001b[43m)\u001b[49m\u001b[38;5;241m.\u001b[39mdetach_memmap()\n\u001b[1;32m    577\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mhook_before_interpret()\n\u001b[1;32m    579\u001b[0m (\n\u001b[1;32m    580\u001b[0m     magic,\n\u001b[1;32m    581\u001b[0m     \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_fVersion,\n\u001b[0;32m   (...)\u001b[0m\n\u001b[1;32m    595\u001b[0m     \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_begin_chunk, _file_header_fields_small, {}\n\u001b[1;32m    596\u001b[0m )\n",
+      "File \u001b[0;32m/usr/local/lib/python3.12/site-packages/uproot/source/fsspec.py:117\u001b[0m, in \u001b[0;36mFSSpecSource.chunk\u001b[0;34m(self, start, stop)\u001b[0m\n\u001b[1;32m    115\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_num_requested_chunks \u001b[38;5;241m+\u001b[39m\u001b[38;5;241m=\u001b[39m \u001b[38;5;241m1\u001b[39m\n\u001b[1;32m    116\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_num_requested_bytes \u001b[38;5;241m+\u001b[39m\u001b[38;5;241m=\u001b[39m stop \u001b[38;5;241m-\u001b[39m start\n\u001b[0;32m--> 117\u001b[0m data \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43m_fs\u001b[49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43mcat_file\u001b[49m\u001b[43m(\u001b[49m\u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43m_file_path\u001b[49m\u001b[43m,\u001b[49m\u001b[43m \u001b[49m\u001b[43mstart\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mstart\u001b[49m\u001b[43m,\u001b[49m\u001b[43m \u001b[49m\u001b[43mend\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mstop\u001b[49m\u001b[43m)\u001b[49m\n\u001b[1;32m    118\u001b[0m future \u001b[38;5;241m=\u001b[39m uproot\u001b[38;5;241m.\u001b[39msource\u001b[38;5;241m.\u001b[39mfutures\u001b[38;5;241m.\u001b[39mTrivialFuture(data)\n\u001b[1;32m    119\u001b[0m \u001b[38;5;28;01mreturn\u001b[39;00m uproot\u001b[38;5;241m.\u001b[39msource\u001b[38;5;241m.\u001b[39mchunk\u001b[38;5;241m.\u001b[39mChunk(\u001b[38;5;28mself\u001b[39m, start, stop, future)\n",
+      "File \u001b[0;32m/usr/local/lib/python3.12/site-packages/fsspec/asyn.py:118\u001b[0m, in \u001b[0;36msync_wrapper.<locals>.wrapper\u001b[0;34m(*args, **kwargs)\u001b[0m\n\u001b[1;32m    115\u001b[0m \u001b[38;5;129m@functools\u001b[39m\u001b[38;5;241m.\u001b[39mwraps(func)\n\u001b[1;32m    116\u001b[0m \u001b[38;5;28;01mdef\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21mwrapper\u001b[39m(\u001b[38;5;241m*\u001b[39margs, \u001b[38;5;241m*\u001b[39m\u001b[38;5;241m*\u001b[39mkwargs):\n\u001b[1;32m    117\u001b[0m     \u001b[38;5;28mself\u001b[39m \u001b[38;5;241m=\u001b[39m obj \u001b[38;5;129;01mor\u001b[39;00m args[\u001b[38;5;241m0\u001b[39m]\n\u001b[0;32m--> 118\u001b[0m     \u001b[38;5;28;01mreturn\u001b[39;00m \u001b[43msync\u001b[49m\u001b[43m(\u001b[49m\u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43mloop\u001b[49m\u001b[43m,\u001b[49m\u001b[43m \u001b[49m\u001b[43mfunc\u001b[49m\u001b[43m,\u001b[49m\u001b[43m \u001b[49m\u001b[38;5;241;43m*\u001b[39;49m\u001b[43margs\u001b[49m\u001b[43m,\u001b[49m\u001b[43m \u001b[49m\u001b[38;5;241;43m*\u001b[39;49m\u001b[38;5;241;43m*\u001b[39;49m\u001b[43mkwargs\u001b[49m\u001b[43m)\u001b[49m\n",
+      "File \u001b[0;32m/usr/local/lib/python3.12/site-packages/fsspec/asyn.py:103\u001b[0m, in \u001b[0;36msync\u001b[0;34m(loop, func, timeout, *args, **kwargs)\u001b[0m\n\u001b[1;32m    101\u001b[0m     \u001b[38;5;28;01mraise\u001b[39;00m FSTimeoutError \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mreturn_result\u001b[39;00m\n\u001b[1;32m    102\u001b[0m \u001b[38;5;28;01melif\u001b[39;00m \u001b[38;5;28misinstance\u001b[39m(return_result, \u001b[38;5;167;01mBaseException\u001b[39;00m):\n\u001b[0;32m--> 103\u001b[0m     \u001b[38;5;28;01mraise\u001b[39;00m return_result\n\u001b[1;32m    104\u001b[0m \u001b[38;5;28;01melse\u001b[39;00m:\n\u001b[1;32m    105\u001b[0m     \u001b[38;5;28;01mreturn\u001b[39;00m return_result\n",
+      "File \u001b[0;32m/usr/local/lib/python3.12/site-packages/fsspec/asyn.py:56\u001b[0m, in \u001b[0;36m_runner\u001b[0;34m(event, coro, result, timeout)\u001b[0m\n\u001b[1;32m     54\u001b[0m     coro \u001b[38;5;241m=\u001b[39m asyncio\u001b[38;5;241m.\u001b[39mwait_for(coro, timeout\u001b[38;5;241m=\u001b[39mtimeout)\n\u001b[1;32m     55\u001b[0m \u001b[38;5;28;01mtry\u001b[39;00m:\n\u001b[0;32m---> 56\u001b[0m     result[\u001b[38;5;241m0\u001b[39m] \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;01mawait\u001b[39;00m coro\n\u001b[1;32m     57\u001b[0m \u001b[38;5;28;01mexcept\u001b[39;00m \u001b[38;5;167;01mException\u001b[39;00m \u001b[38;5;28;01mas\u001b[39;00m ex:\n\u001b[1;32m     58\u001b[0m     result[\u001b[38;5;241m0\u001b[39m] \u001b[38;5;241m=\u001b[39m ex\n",
+      "File \u001b[0;32m/usr/local/lib/python3.12/site-packages/fsspec_xrootd/xrootd.py:499\u001b[0m, in \u001b[0;36mXRootDFileSystem._cat_file\u001b[0;34m(self, path, start, end, **kwargs)\u001b[0m\n\u001b[1;32m    496\u001b[0m \u001b[38;5;28;01masync\u001b[39;00m \u001b[38;5;28;01mdef\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21m_cat_file\u001b[39m(\n\u001b[1;32m    497\u001b[0m     \u001b[38;5;28mself\u001b[39m, path: \u001b[38;5;28mstr\u001b[39m, start: \u001b[38;5;28mint\u001b[39m \u001b[38;5;241m|\u001b[39m \u001b[38;5;28;01mNone\u001b[39;00m, end: \u001b[38;5;28mint\u001b[39m \u001b[38;5;241m|\u001b[39m \u001b[38;5;28;01mNone\u001b[39;00m, \u001b[38;5;241m*\u001b[39m\u001b[38;5;241m*\u001b[39mkwargs: Any\n\u001b[1;32m    498\u001b[0m ) \u001b[38;5;241m-\u001b[39m\u001b[38;5;241m>\u001b[39m Any:\n\u001b[0;32m--> 499\u001b[0m     _myFile \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;01mawait\u001b[39;00m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_readonly_filehandle_cache\u001b[38;5;241m.\u001b[39m_open(\n\u001b[1;32m    500\u001b[0m         \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39munstrip_protocol(path),\n\u001b[1;32m    501\u001b[0m         \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mtimeout,\n\u001b[1;32m    502\u001b[0m     )\n\u001b[1;32m    503\u001b[0m     n_bytes \u001b[38;5;241m=\u001b[39m end\n\u001b[1;32m    504\u001b[0m     \u001b[38;5;28;01mif\u001b[39;00m start \u001b[38;5;129;01mis\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;28;01mNone\u001b[39;00m \u001b[38;5;129;01mand\u001b[39;00m end \u001b[38;5;129;01mis\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;28;01mNone\u001b[39;00m:\n",
+      "File \u001b[0;32m/usr/local/lib/python3.12/site-packages/fsspec_xrootd/xrootd.py:211\u001b[0m, in \u001b[0;36mReadonlyFileHandleCache._open\u001b[0;34m(self, url, timeout)\u001b[0m\n\u001b[1;32m    209\u001b[0m     \u001b[38;5;28;01mreturn\u001b[39;00m item\u001b[38;5;241m.\u001b[39mhandle\n\u001b[1;32m    210\u001b[0m handle \u001b[38;5;241m=\u001b[39m client\u001b[38;5;241m.\u001b[39mFile()\n\u001b[0;32m--> 211\u001b[0m status, _ \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;01mawait\u001b[39;00m _async_wrap(handle\u001b[38;5;241m.\u001b[39mopen)(\n\u001b[1;32m    212\u001b[0m     url,\n\u001b[1;32m    213\u001b[0m     OpenFlags\u001b[38;5;241m.\u001b[39mREAD,\n\u001b[1;32m    214\u001b[0m     timeout\u001b[38;5;241m=\u001b[39mtimeout,\n\u001b[1;32m    215\u001b[0m )\n\u001b[1;32m    216\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m status\u001b[38;5;241m.\u001b[39mok:\n\u001b[1;32m    217\u001b[0m     \u001b[38;5;28;01mraise\u001b[39;00m \u001b[38;5;167;01mOSError\u001b[39;00m(\u001b[38;5;124mf\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mFailed to open file: \u001b[39m\u001b[38;5;132;01m{\u001b[39;00mstatus\u001b[38;5;241m.\u001b[39mmessage\u001b[38;5;132;01m}\u001b[39;00m\u001b[38;5;124m\"\u001b[39m)\n",
+      "File \u001b[0;32m/usr/local/lib/python3.12/site-packages/fsspec_xrootd/xrootd.py:66\u001b[0m, in \u001b[0;36m_async_wrap.<locals>.wrapped\u001b[0;34m(*args, **kwargs)\u001b[0m\n\u001b[1;32m     64\u001b[0m submit_status: XRootDStatus \u001b[38;5;241m=\u001b[39m func(\u001b[38;5;241m*\u001b[39margs, \u001b[38;5;241m*\u001b[39m\u001b[38;5;241m*\u001b[39mkwargs, callback\u001b[38;5;241m=\u001b[39mcallback)\n\u001b[1;32m     65\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m submit_status\u001b[38;5;241m.\u001b[39mok:\n\u001b[0;32m---> 66\u001b[0m     \u001b[38;5;28;01mraise\u001b[39;00m \u001b[38;5;167;01mOSError\u001b[39;00m(\n\u001b[1;32m     67\u001b[0m         \u001b[38;5;124mf\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mFailed to submit \u001b[39m\u001b[38;5;132;01m{\u001b[39;00mfunc\u001b[38;5;132;01m!r}\u001b[39;00m\u001b[38;5;124m request: \u001b[39m\u001b[38;5;132;01m{\u001b[39;00msubmit_status\u001b[38;5;241m.\u001b[39mmessage\u001b[38;5;241m.\u001b[39mstrip()\u001b[38;5;132;01m}\u001b[39;00m\u001b[38;5;124m\"\u001b[39m\n\u001b[1;32m     68\u001b[0m     )\n\u001b[1;32m     69\u001b[0m \u001b[38;5;28;01mreturn\u001b[39;00m \u001b[38;5;28;01mawait\u001b[39;00m future\n",
+      "\u001b[0;31mOSError\u001b[0m: Failed to submit <bound method File.open of <XRootD.client.file.File object at 0x7f18bab04230>> request: [FATAL] Connection error"
+     ]
+    }
+   ],
+   "source": [
+    "with uproot.open(url) as f:\n",
+    "    print(f.keys())"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "7a470f53-e00b-43da-8dd7-e2b591a1822d",
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.13.11"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
