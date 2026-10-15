@@ -1,0 +1,11 @@
+# Environment used by om_rishabh_mentor_dataset.ipynb (Python 3.14).
+numpy==2.5.4
+scipy==1.18.1
+scikit-learn==1.9.1
+matplotlib==3.11.2
+uproot==5.7.7
+awkward==2.14.0
+ipykernel==7.4.0
+jupyterlab==4.6.4
+nbconvert==7.17.1
+nbformat==5.11.1
